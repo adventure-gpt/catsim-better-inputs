@@ -65,11 +65,11 @@ fix.sent(controls)
 Rocket League with a key file (see catSim's README: https://github.com/adventure-gpt/catsim-public). One command:
 
 ```
-pip install "catsim-rl[dump]"                                    # imports as catsim (0.1.3)
+pip install "catsim-better-inputs[dump]"                         # this package + catSim with its dumper
 python -m catsim_better_inputs.setup --keys path/to/keys.txt     # writes ./catsim_data; a few minutes
 ```
 
-Run it in your bot's folder (the one holding `catsim_better_inputs/`), with the Python your bot uses. It checks the
+Run it in your bot's folder, with the Python your bot uses. It checks the
 folder first and stops there if the data is already good, so running it again is harmless. Otherwise it makes the
 data, printing the dumper's progress, and ends with catSim's own check of the result (exit code 0 when the folder is
 ready). `--out DIR` writes somewhere else; `--game DIR` points at Rocket League if it isn't found from Steam or Epic.
@@ -92,7 +92,7 @@ files: it never starts the game and never touches a running one. Nothing in this
   If `catsim_data/` is missing, this starts the dump in the background (a separate, low-priority process; its output
   goes to `catsim_data.dump.log`) and the bot plays on **plain inputs** for the first few minutes (see "Plain inputs"
   below). Once the data is ready, correction switches itself on at the next kickoff. The bot's Python needs the
-  dumper: `pip install "catsim-rl[dump]"`.
+  dumper: `pip install "catsim-better-inputs[dump]"`.
 
 Without the data and without `dump_if_missing`, creating the `Corrector` raises `FileNotFoundError`. Its message
 gives the exact setup command for that folder.
@@ -102,8 +102,9 @@ needs Python once on that PC, not at match time: `pip install "catsim-rl[dump]"`
 --keys keys.txt`. The native library has no plain mode and doesn't run the dumper. Without the data, `csc_new` returns
 NULL with the reason in `err` (the C++ wrapper throws it), so catch that and play on the raw packet.
 
-**2a. Python:** copy the `catsim_better_inputs/` folder into your bot. It depends only on `catsim` and, for
-reading RLBot packets, `rlbot`. numpy, rlgym and rlgym-compat are needed only by the adapters that use them.
+**2a. Python:** it's on PyPI - `pip install catsim-better-inputs`, or put `catsim-better-inputs` in your bot's
+requirements. If you'd rather vendor it, copying the `catsim_better_inputs/` folder into your bot works the same.
+It depends only on `catsim` (installed with it) and, for reading RLBot packets, `rlbot`. numpy, rlgym and rlgym-compat are needed only by the adapters that use them.
 RLBot v5's Python package is the 2.0 pre-release, so install it with `--pre`. A plain `pip install rlbot` gets v4's
 1.x:
 
