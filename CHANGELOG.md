@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.4
+
+- **`dump_if_missing=True` never blocks the bot any more.** In 0.1.3 the dump ran inside the bot's start-up, so a bot
+  on a fresh PC froze for minutes and could miss RLBot's launch timeout. Now the dump starts in the background (a
+  separate, low-priority process, output in `catsim_data.dump.log`) and the corrector runs in **plain mode** until it
+  is done: `correct(packet)` returns the packet's own state in the same types and field names (`state.plain` is
+  `True`; the README lists what each field holds), and `sent()` works as usual. When catSim's `--check` passes,
+  correction switches itself on at the next kickoff countdown, goal or new match, never mid-play. If the dump fails,
+  the bot stays on plain inputs for the session and says why; nothing raises. `fix.mode` is `"corrected"`,
+  `"dumping"` or `"plain"`, and `fix.dump_error` holds the reason. There are no threads: the dump is looked at on
+  each packet. Several bots on one PC share one dump (a lock file next to the folder).
+- **Setup command:** `python -m catsim_better_inputs.setup --keys keys.txt [--out catsim_data] [--game DIR]` makes the
+  data before any match: it checks the folder, dumps only if needed with the dumper's progress shown, and prints the
+  check of the result (`catsim-better-inputs-setup` does the same when the package is pip-installed). The README now
+  recommends this first.
+- **Clearer error without data:** without `dump_if_missing`, a missing or broken data folder still raises at
+  construction, now a `FileNotFoundError` that gives the exact setup command for that folder.
+- New in the API: `Corrector(..., game=, log=)`, `Corrector.mode`, `Corrector.dump_error`, `Corrected.plain`,
+  `check_data()`, `DumpJob`; `ensure_data()` takes `echo=`.
+- README: make the data at setup time, then ship your dump or ship the key file with `dump_if_missing` as a safety
+  net. C, C++, C#, Java and Rust bots (the native library, which has no plain mode) should make the data at setup.
+- Tests: `tests/test_plain_mode.py` (plain state from RLBot v5 packets, the switch only between plays and identical to
+  a fresh start, a failed dump staying plain, the dump as a subprocess, one dump per folder, the setup command).
+
 ## 0.1.3
 
 - **Dump on first run:** `ensure_data(data_dir, keys=...)` and `Corrector(..., dump_if_missing=True, keys=...)` make `catsim_data/` from the machine's own Rocket League install when it is missing, so a bot can ship only the key file. README: the two ways to run a bot on another machine.

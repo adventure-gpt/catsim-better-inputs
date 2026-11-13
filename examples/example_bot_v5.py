@@ -14,6 +14,9 @@ class MyBot(Bot):
         # training_action_delay: the action delay your policy was trained with (0 if controls applied at once).
         # The corrector measures RLBot's real delay itself and predicts the difference.
         self.fix = Corrector(index=self.index, data_dir="catsim_data", training_action_delay=0, field_info=self.field_info)
+        # (no catsim_data on this PC? make it at setup: python -m catsim_better_inputs.setup --keys keys.txt. Or add
+        #  dump_if_missing=True, keys="keys.txt": the bot then makes it in the background and plays on plain inputs
+        #  until it's ready - self.fix.mode says which)
 
     def get_output(self, packet: flat.GamePacket) -> flat.ControllerState:
         # Call this on EVERY packet, even if your policy acts only every few ticks: the tracker steps from packet to

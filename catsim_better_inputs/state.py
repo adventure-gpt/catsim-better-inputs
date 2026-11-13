@@ -7,6 +7,7 @@ trusted (README, "Which fields are exact").
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from . import rsview as R
@@ -128,6 +129,7 @@ class Corrected:
     cars: list
     ball: BallState | None
     pads: list
+    plain: bool = False            # True: built straight from the packet, no catSim (Corrector.mode isn't "corrected")
 
     def car(self, i: int) -> CarState:
         return self.cars[i]
@@ -185,4 +187,66 @@ def read_car(na, i: int, obs: R.RSObserver, physics_frame: int) -> CarState:
            and h[R.H_JUMP_T] < R.DOUBLEJUMP_MAX_DELAY)
     s.dodgeTimeout = max(0.0, R.DOUBLEJUMP_MAX_DELAY - h[R.H_JUMP_T]) if can else -1.0   # the game's jump clock
     s.catsimHidden = tuple(h)
+    return s
+
+
+def rot_mat(pitch: float, yaw: float, roll: float) -> tuple:
+    """(forward, right, up) from the game's rotator in radians: RocketSim's rotMat columns."""
+    cp, sp, cy, sy, cr, sr = math.cos(pitch), math.sin(pitch), math.cos(yaw), math.sin(yaw), math.cos(roll), math.sin(roll)
+    return ((cp * cy, cp * sy, sp),
+            (cy * sp * sr - cr * sy, sy * sp * sr + cr * cy, -cp * sr),
+            (-cr * cy * sp - sr * sy, -cr * sy * sp + sr * cy, cp * cr))
+
+
+# what plain mode marks in every car's confidence: nothing is checked or tracked
+PLAIN_CONFIDENCE = {"plain": True, "synced": False, "consistent": False, "ticks_since_cold": 0, "drift": 0.0,
+                    "preset": None, "inputs_known": False}
+
+
+def plain_car(p, i: int) -> CarState:
+    """Car i straight from its packet (`packets.CarIn`), with no catSim: plain mode (README, "Plain inputs").
+    What the packet carries is copied as RLBot reports it (flags unchecked). What it can't say gets a stand-in:
+    wheels all touching when the air state says on the ground, the jump/flip clocks from RLBot's dodge clocks where
+    it has them, boosting and the handbrake from the buttons held, the boost, air and supersonic timers 0, the contacts
+    empty."""
+    s = CarState(index=i, team=int(p.team))
+    s.pos, s.vel, s.angVel = tuple(p.pos), tuple(p.vel), tuple(p.ang_vel)
+    s.rotMat = rot_mat(*p.rot)
+    li = tuple(float(x) for x in p.last_input) if p.last_input is not None else (0.0,) * 8
+    s.lastControls = li
+    s.boost = float(p.boost)
+    s.confidence = dict(PLAIN_CONFIDENCE)
+    if p.demolished:
+        s.isDemoed, s.demoRespawnTimer = True, float(p.demo_left)
+        s.isOnGround, s.wheelsWithContact = False, (False,) * 4
+        return s
+    air = p.air_state
+    if air is not None:
+        on = int(air) == 0                                   # RLBot v5 AirState.OnGround
+    else:
+        on = bool(p.on_ground)                               # RLBot v4 has_wheel_contact (False if unknown)
+    s.isOnGround = on
+    s.wheelsWithContact = (on,) * 4
+    if on:
+        s.wheelNormals = (s.rotMat[2],) * 4                   # the surface under the car: its own up axis
+    jumped, dj, flipped = bool(p.has_jumped), bool(p.has_double_jumped), bool(p.has_dodged)
+    s.hasJumped, s.hasDoubleJumped, s.hasFlipped = jumped, dj, flipped
+    s.isJumping = air is not None and int(air) == 1          # AirState.Jumping
+    if flipped:
+        s.flipTime = float(p.dodge_elapsed or 0.0)
+        s.isFlipping = s.flipTime < R.FLIP_TORQUE_TIME
+        s.pitchLockLeft = max(0.0, R.FLIP_TORQUE_TIME + R.FLIP_PITCHLOCK_EXTRA_TIME - s.flipTime)
+        if p.dodge_dir is not None:
+            s.flipRelTorque = (-float(p.dodge_dir[1]), float(p.dodge_dir[0]), 0.0)
+    dt = p.dodge_timeout                                     # RLBot's: the game's jump clock, -1 none / jumping
+    s.dodgeTimeout = float(dt) if dt is not None else -1.0
+    if jumped and not s.isJumping and not on and dt is not None:   # (RocketSim zeroes both on the ground)
+        s.airTimeSinceJump = max(0.0, R.DOUBLEJUMP_MAX_DELAY - float(dt)) if dt >= 0 else R.DOUBLEJUMP_MAX_DELAY
+        s.jumpTime = s.airTimeSinceJump + 0.1                    # (as the corrector's own cold start guesses it)
+    s.isBoosting = li[6] > 0.5 and s.boost > 0.0
+    s.isSupersonic = bool(p.supersonic)
+    s.handbrakeVal = 1.0 if li[7] > 0.5 else 0.0
+    s.jumpHoldBroken = li[5] < 0.5
+    s.canFlip = on or (not flipped and not dj and s.airTimeSinceJump < R.DOUBLEJUMP_MAX_DELAY)
+    s.hasFlipReset = (not on) and s.canFlip and not jumped
     return s

@@ -12,6 +12,10 @@ Per packet (`update`):
   4. after a cold start or a snap, a one-tick probe finds the wheels' contacts at the packet's pose.
 `predict(ticks)` copies the tracking arena and steps it ahead with your buffered controls and an estimate of everyone
 else's, then reads every car out in RocketSim's CarState meanings.
+
+Without catSim's data and with `dump_if_missing=True`, the corrector starts in plain mode: the data is made in the
+background (data.DumpJob) while `correct` hands back the packet's own state in the same types, and correction switches
+on by itself at the next kickoff (or new match) after the data is ready.
 """
 from __future__ import annotations
 
@@ -22,13 +26,47 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from . import rsview as R
+from .data import DumpJob, check_data, ensure_data  # noqa: F401  (ensure_data: core's name since 0.1.3)
 from .packets import (DODGING, DOUBLE_JUMPING, IN_AIR, JUMPING, ON_GROUND, Frame, as_frame)
-from .state import BallState, CarState, Corrected, PadState, read_car
+from .state import BallState, CarState, Corrected, PadState, plain_car, read_car
 
 DT = R.DT
 ROT = 32768.0 / math.pi
 
 STANDARD_PRESETS = ("Octane", "MuscleCar", "Darkcar", "LongCar", "Hybrid", "Merc")
+
+# The soccar boost pads in catSim's order (x, y, big): the layout RLBot's field_info and RocketSim also list. Plain
+# mode (no catSim loaded) puts the pads in this order, so `state.pads[j]` is the same pad in both modes.
+SOCCAR_PADS = ((0, -4240, 0), (-1792, -4184, 0), (1792, -4184, 0), (-3072, -4096, 1), (3072, -4096, 1),
+               (-940, -3308, 0), (940, -3308, 0), (0, -2816, 0), (-3584, -2484, 0), (3584, -2484, 0),
+               (-1788, -2302, 0), (1788, -2302, 0), (-2048, -1036, 0), (2048, -1036, 0), (0, -1024, 0),
+               (-3584, 0, 1), (-1024, 0, 0), (1024, 0, 0), (3584, 0, 1), (0, 1024, 0), (-2048, 1036, 0),
+               (2048, 1036, 0), (-1788, 2302, 0), (1788, 2302, 0), (-3584, 2484, 0), (3584, 2484, 0), (0, 2816, 0),
+               (-940, 3308, 0), (940, 3308, 0), (-3072, 4096, 1), (3072, 4096, 1), (-1792, 4184, 0), (1792, 4184, 0),
+               (0, 4240, 0))
+# packets on which plain mode may switch correction on: between plays (a kickoff countdown, a goal, a match's start
+# or end), never in play
+SWITCH_PHASES = ("countdown", "inactive", "goal", "replay", "ended")
+
+
+def _print_log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def missing_data_message(data_dir: str, why=None) -> str:
+    """What to do when there is no catSim data (the error a Corrector raises without dump_if_missing)."""
+    d = os.path.abspath(str(data_dir))
+    if not os.path.isdir(d):
+        reason = "there is no such folder"
+    else:
+        reason = str(why).strip().splitlines()[0] if why is not None and str(why).strip() else "missing or incomplete"
+    return (f"catSim's game data isn't usable in {d} ({reason}). Make it once on this PC (it reads Rocket League's "
+            f"files, never starts the game, a few minutes):\n"
+            f"    pip install \"catsim-rl[dump]\"\n"
+            f"    python -m catsim_better_inputs.setup --keys path/to/keys.txt --out \"{d}\"\n"
+            f"or copy a catsim_data folder made on another PC to {d}, or create the Corrector with "
+            f"dump_if_missing=True, keys=\"keys.txt\" so the bot makes it in the background and plays on plain RLBot "
+            f"inputs until it's ready.")
 
 
 @dataclass
@@ -168,29 +206,6 @@ PROVENANCE = {"air_state": {"jump_clock", "dj_clock", "dodge_clock"}, "has_jumpe
               "dodge_elapsed": {"has_dodged", "dodge_clock"}, "supersonic": {"supersonic"}, "on_ground": set()}
 
 
-def ensure_data(data_dir: str = "catsim_data", keys: str | None = None, game: str | None = None,
-                timeout: float = 1800.0) -> str:
-    """Make sure `data_dir` holds catSim's game data; if it doesn't, dump it from this machine's own Rocket League
-    install (found from Steam or Epic, or `game`) with the key file `keys` (default: $CATSIM_RL_KEYS). Only reads the
-    game's files; never starts the game. The first dump takes a few minutes; later calls just check the folder.
-    Needs catsim-rl's dumper: pip install "catsim-rl[dump]". Returns the folder."""
-    import subprocess
-    import sys
-    check = subprocess.run([sys.executable, "-m", "catsim.dump", "--check", data_dir],
-                           capture_output=True, text=True)
-    if check.returncode == 0:
-        return data_dir
-    cmd = [sys.executable, "-m", "catsim.dump", "--out", data_dir]
-    if keys:
-        cmd += ["--keys", keys]
-    if game:
-        cmd += ["--game", game]
-    dump = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    if dump.returncode != 0:
-        raise RuntimeError(f"catsim data dump failed ({dump.returncode}): {(dump.stderr or dump.stdout)[-400:]}")
-    return data_dir
-
-
 class Corrector:
     """catSim input correction for one bot (or a hivemind: pass several indices).
 
@@ -198,21 +213,31 @@ class Corrector:
         state = fix.correct(packet)        # each packet, before the policy runs
         controls = policy(state)
         fix.sent(controls)                 # after, with what you return
+
+    Without catSim's data in `data_dir` this raises FileNotFoundError (its message says how to make the data), unless
+    `dump_if_missing=True`: then the data is made in the background with the key file `keys` (and `game`, the Rocket
+    League folder, if it isn't found from Steam or Epic) and the corrector runs in plain mode until it's ready.
+    `fix.mode` says which: "corrected", "dumping" (plain inputs, the dump is running) or "plain" (plain inputs for the
+    rest of the session: `fix.dump_error` says why). `log`: where the corrector's few status lines go (default print).
     """
 
     def __init__(self, index: int | list = 0, data_dir: str | None = None, training_action_delay: int = 0,
                  input_delay: int | None = None, opponent_model=None, tolerances: Tolerances | None = None,
                  field_info=None, map: str = "Stadium_P", log_flag_errors: bool = False, trust_packet_flags: bool = False,
                  rlbot_air_order: str = "auto", last_input_is_applied: bool = True, pad_timer: str = "auto",
-                 dump_if_missing: bool = False, keys: str | None = None):
+                 dump_if_missing: bool = False, keys: str | None = None, game: str | None = None, log=None):
         import catsim
         self.cs = catsim
-        data = data_dir or os.environ.get("CATSIM_DATA") or "catsim_data"
-        if dump_if_missing:                      # ship only the key file: the data is dumped here on first run
-            ensure_data(data, keys=keys)
-        catsim.init(data, silent=True)
-        self.data_dir = str(catsim._data_dir)
-        self.lib = catsim._lib()
+        self.log = log or _print_log
+        data = str(data_dir or os.environ.get("CATSIM_DATA") or "catsim_data")
+        self.data_dir = data
+        self.lib = None
+        self.dump: DumpJob | None = None          # the background dump (dump_if_missing), if one was needed
+        self._on = False                          # catSim loaded and correcting
+        self._switch_error = None
+        self._plain_last = None
+        self._plain_frame = None
+        self._plain_pad_map = None
         self.own = [index] if isinstance(index, int) else list(index)
         self.training_action_delay = int(training_action_delay)
         self.fixed_delay = input_delay
@@ -247,6 +272,134 @@ class Corrector:
         self._prev = None
         self._prev_obs = []
         self._rows = []
+        if not dump_if_missing:
+            self._start_catsim(data, explain=True)
+        elif check_data(data)[0]:
+            try:
+                self._start_catsim(data)
+            except BaseException as e:            # the check passed but catSim can't load it: never crash the bot
+                if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise
+                self._switch_error = f"catSim couldn't load {os.path.abspath(data)}: {e}"
+                self.log(f"catsim-better-inputs: {self._switch_error}. This session stays on plain RLBot inputs.")
+        else:                                     # ship only the key file: the data is made here, in the background
+            self.dump = DumpJob(data, keys=keys, game=game, on_done=self._dump_ended)
+            self.log(f"catsim-better-inputs: no catSim data in {self.dump.data_dir} yet, so it is being made in the "
+                     f"background from this PC's Rocket League files (a few minutes; the game isn't touched; log: "
+                     f"{self.dump.log_path}). Until then the bot gets plain RLBot inputs; correction switches on by "
+                     f"itself at the next kickoff after that.")
+            self.dump.start()
+
+    # ------------------------------------------------------------------ catSim on / plain mode
+
+    def _start_catsim(self, data: str, explain: bool = False) -> None:
+        try:
+            self.cs.init(data, silent=True)
+        except BaseException as e:
+            if not explain or isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
+            raise FileNotFoundError(missing_data_message(data, e)) from e
+        self.data_dir = str(self.cs._data_dir)
+        self.lib = self.cs._lib()
+        self._on = True
+
+    @property
+    def mode(self) -> str:
+        """"corrected": catSim is on. "dumping": catSim's data is being made in the background; `correct` returns the
+        packet's plain state until correction switches on by itself, at the next kickoff after the data is ready.
+        "plain": the plain state for the rest of this session (the dump failed: `dump_error` says why).
+        (Reading it also moves the background dump on, as every packet does.)"""
+        if self._on:
+            return "corrected"
+        if self.dump is not None:
+            self.dump.poll()
+        if self.dump is not None and self.dump.state != "failed" and self._switch_error is None:
+            return "dumping"
+        return "plain"
+
+    @property
+    def dump_error(self) -> str | None:
+        """Why this session is on plain inputs (mode "plain"), else None."""
+        if self._on:
+            return None
+        if self._switch_error is not None:
+            return self._switch_error
+        if self.dump is None:
+            return None
+        self.dump.poll()
+        return self.dump.error
+
+    def _dump_ended(self, job: DumpJob) -> None:          # (called from a poll, on the bot's own thread)
+        if job.state == "failed":
+            self.log(f"catsim-better-inputs: making catSim's data failed: {job.error}. This session stays on plain "
+                     f"RLBot inputs. To fix it before the next match: python -m catsim_better_inputs.setup "
+                     f"--keys path/to/keys.txt --out \"{job.data_dir}\"")
+
+    def _switch_on(self, fr: Frame) -> bool:
+        """Plain mode: turn correction on if the dump is done and this packet is between plays (never mid-play)."""
+        job = self.dump
+        if job is None or job.poll() != "done" or self._switch_error is not None:
+            return False
+        new_match = self._plain_frame is not None and fr.frame < self._plain_frame
+        if fr.phase not in SWITCH_PHASES and not new_match:
+            return False
+        try:
+            self._start_catsim(job.data_dir)
+        except BaseException as e:
+            if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
+            self._switch_error = f"catSim couldn't load the new data in {job.data_dir}: {e}"
+            self.log(f"catsim-better-inputs: {self._switch_error}. This session stays on plain RLBot inputs.")
+            return False
+        self.frame = -1
+        self.log(f"catsim-better-inputs: catSim's data is ready ({self.data_dir}): input correction is on from here.")
+        return True
+
+    def _plain_update(self, fr: Frame) -> Corrected:
+        """The packet's own state in the corrected types, with no catSim (state.plain_car)."""
+        for i in self.own:
+            if i < len(fr.cars):
+                self.meter.seen(fr.frame, fr.cars[i].last_input)    # the lag meter runs anyway: D is ready at the switch
+        self._learn_pad_timer(fr)
+        self.last_frame = fr
+        self._plain_frame = fr.frame
+        if fr.phase in ("inactive", "replay", "ended", "goal"):
+            self.frame = -1
+            self._plain_last = None                   # nothing to correct between a goal and the next kickoff
+            return None
+        self.frame = fr.frame
+        out = Corrected(frame=fr.frame, horizon=0, input_delay=self.input_delay,
+                        cars=[plain_car(p, i) for i, p in enumerate(fr.cars)], ball=None, pads=self._plain_pads(fr),
+                        plain=True)
+        for c in out.cars:
+            c.confidence["assumed"] = sorted(ALL_FACTS)          # nothing is checked: every fact is the packet's
+        if fr.ball is not None:
+            out.ball = BallState(pos=tuple(fr.ball.pos), vel=tuple(fr.ball.vel), angVel=tuple(fr.ball.ang_vel))
+        self._plain_last = out
+        return out
+
+    def _plain_pads(self, fr: Frame) -> list:
+        """The packet's pads in catSim's order (the corrected state's), so pads[j] is the same pad in both modes."""
+        if not fr.pads:
+            return []
+        mode = self.pad_mode or "left"
+        soccar = len(fr.pads) == len(SOCCAR_PADS)
+        if soccar and self._plain_pad_map is None:
+            locs = fr.extra.get("pad_locations")
+            if locs and len(locs) == len(SOCCAR_PADS):
+                self._plain_pad_map = [min(range(len(SOCCAR_PADS)), key=lambda k: (SOCCAR_PADS[k][0] - x) ** 2 +
+                                           (SOCCAR_PADS[k][1] - y) ** 2) for x, y in locs]
+            else:
+                self._plain_pad_map = list(range(len(SOCCAR_PADS)))
+        out = [PadState() for _ in fr.pads]
+        for k, (active, timer) in enumerate(fr.pads):
+            j = self._plain_pad_map[k] if soccar else k
+            big = bool(SOCCAR_PADS[j][2]) if soccar else False
+            ln = 10.0 if big else 4.0
+            el = float(timer) if mode == "elapsed" else max(0.0, ln - float(timer))
+            out[j] = PadState(isActive=bool(active), cooldown=0.0 if active else max(0.0, ln - el),
+                              timer=0.0 if active else el, isBig=big)
+        return out
 
     # ------------------------------------------------------------------ inputs
 
@@ -352,8 +505,11 @@ class Corrector:
     # ------------------------------------------------------------------ per packet
 
     def update(self, packet) -> Corrected:
-        """Take a packet; return the corrected state at the packet's own frame (no look-ahead)."""
+        """Take a packet; return the corrected state at the packet's own frame (no look-ahead). In plain mode
+        (`mode` isn't "corrected"): the packet's own state, with `plain=True`."""
         fr = as_frame(packet, self.field_info)
+        if not self._on and not self._switch_on(fr):
+            return self._plain_update(fr)
         for i in self.own:
             if i < len(fr.cars):
                 self.meter.seen(fr.frame, fr.cars[i].last_input)
@@ -397,6 +553,8 @@ class Corrector:
         holding this match at the packet's frame, e.g. one you ran in lockstep from a kickoff. Its cars must be in the
         packet's order. `observers`: RocketSim bookkeeping per car if you have it (default: fresh, right for cars on
         the ground)."""
+        if not self._on:
+            raise RuntimeError(f"seed_exact needs catSim, and this corrector is in {self.mode} mode")
         fr = as_frame(packet, self.field_info)
         self._build(fr)
         self.na = native_arena.copy()
@@ -410,6 +568,8 @@ class Corrector:
     def predict(self, ticks: int | None = None) -> Corrected:
         """The state `ticks` ticks after the last packet (default: `horizon`), stepped with your sent controls and the
         opponent estimate."""
+        if not self._on:
+            return self._plain_last                   # plain mode: the last packet's own state (horizon 0)
         n = self.horizon if ticks is None else int(ticks)
         if self.na is None or (self.last_frame is not None and self.last_frame.phase in ("inactive", "replay", "ended", "goal")):
             return None
@@ -885,7 +1045,8 @@ class Corrector:
         if b is not None:
             self.na.set_ball([*b.pos, *b.vel, *b.ang_vel], False)
 
-    def _set_pads(self, fr: Frame, force: bool) -> None:
+    def _learn_pad_timer(self, fr: Frame) -> None:
+        """Which way this RLBot's pad timers count, learned from the first one that moves (pad_timer="auto")."""
         if not fr.pads:
             return
         if self.pad_mode is None and self.prev_pads is not None and len(self.prev_pads) == len(fr.pads):
@@ -894,6 +1055,11 @@ class Corrector:
                     self.pad_mode = "left" if t1 < t0 else "elapsed"
                     break
         self.prev_pads = list(fr.pads)
+
+    def _set_pads(self, fr: Frame, force: bool) -> None:
+        if not fr.pads:
+            return
+        self._learn_pad_timer(fr)
         mode = self.pad_mode or "left"
         for k, (active, timer) in enumerate(fr.pads):
             j = self.pad_map[k] if k < len(self.pad_map) else k

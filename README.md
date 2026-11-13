@@ -61,32 +61,46 @@ fix.sent(controls)
 
 ## Install
 
-**1. catSim and its game data** (once). catSim ships no game data; you make it from your own copy of Rocket League.
-See catSim's README: https://github.com/adventure-gpt/catsim-public
+**1. catSim's game data** (once per PC, at setup time). catSim ships no game data. You make it from your own copy of
+Rocket League with a key file (see catSim's README: https://github.com/adventure-gpt/catsim-public). One command:
 
 ```
-pip install "catsim-rl[dump]"                                   # imports as catsim (0.1.3)
-catsim-dump --out catsim_data --keys path/to/keys.txt          # keys.txt: see catSim's README; ~3 min
+pip install "catsim-rl[dump]"                                    # imports as catsim (0.1.3)
+python -m catsim_better_inputs.setup --keys path/to/keys.txt     # writes ./catsim_data; a few minutes
 ```
 
-The dumper only reads files: it never starts the game and never touches a running one. Nothing in this package
-contains game data.
+Run it in your bot's folder (the one holding `catsim_better_inputs/`), with the Python your bot uses. It checks the
+folder first and stops there if the data is already good, so running it again is harmless. Otherwise it makes the
+data, printing the dumper's progress, and ends with catSim's own check of the result (exit code 0 when the folder is
+ready). `--out DIR` writes somewhere else; `--game DIR` points at Rocket League if it isn't found from Steam or Epic.
+(`catsim-dump --out catsim_data --keys keys.txt` is the same dump without the checks around it.) The dumper only reads
+files: it never starts the game and never touches a running one. Nothing in this package contains game data.
+
+**Make the data before matches, not during them.** It takes a few minutes, which is far too long for a bot's start-up.
 
 **Running your bot on another machine** (a tournament host, a friend's PC) - pick one:
 
-- **Ship your dump:** put your `catsim_data/` inside your bot's folder, the same way RLBot bots already ship
-  RocketSim's `collision_meshes/`.
-- **Dump on first run:** ship only the key file, and let the bot make the data from that machine's own Rocket League
-  install the first time it starts (a few minutes, once; later runs reuse the folder):
+- **Ship your dump** (simplest): put your `catsim_data/` inside your bot's folder, the same way RLBot bots already
+  ship RocketSim's `collision_meshes/`. Nothing has to run on the host.
+- **Ship the key file, with a safety net:** ask the host to run the setup command once. If they don't, the bot still
+  starts at once:
 
   ```python
   fix = Corrector(index=self.index, data_dir="catsim_data", dump_if_missing=True, keys="keys.txt")
-  # or, before creating the Corrector:  catsim_better_inputs.ensure_data("catsim_data", keys="keys.txt")
   ```
 
-  This needs the dumper in the bot's Python (`pip install "catsim-rl[dump]"`).
+  If `catsim_data/` is missing, this starts the dump in the background (a separate, low-priority process; its output
+  goes to `catsim_data.dump.log`) and the bot plays on **plain inputs** for the first few minutes (see "Plain inputs"
+  below). Once the data is ready, correction switches itself on at the next kickoff. The bot's Python needs the
+  dumper: `pip install "catsim-rl[dump]"`.
 
-Without either, creating the `Corrector` raises at start-up: catch that and let your bot play on the plain RLBot packet.
+Without the data and without `dump_if_missing`, creating the `Corrector` raises `FileNotFoundError`. Its message
+gives the exact setup command for that folder.
+
+**C, C++, C#, Java and Rust bots** (the native library): make the data at setup time, or ship your dump. The dumper
+needs Python once on that PC, not at match time: `pip install "catsim-rl[dump]"`, then `catsim-dump --out catsim_data
+--keys keys.txt`. The native library has no plain mode and doesn't run the dumper. Without the data, `csc_new` returns
+NULL with the reason in `err` (the C++ wrapper throws it), so catch that and play on the raw packet.
 
 **2a. Python:** copy the `catsim_better_inputs/` folder into your bot. It depends only on `catsim` and, for
 reading RLBot packets, `rlbot`. numpy, rlgym and rlgym-compat are needed only by the adapters that use them.
@@ -204,6 +218,52 @@ predicts one tick less. Measured error at the predicted frame, with D = 3 (tests
 
 Your own car is exact because its inputs are known. Opponents' error comes only from inputs they change inside the
 horizon.
+
+### Plain inputs (while catSim's data is being made)
+
+With `dump_if_missing=True` and no data yet, the bot starts at once and `fix.mode` says where things stand:
+
+| `fix.mode` | What `correct(packet)` returns |
+|---|---|
+| `"corrected"` | the corrected state (the normal case) |
+| `"dumping"` | plain inputs: the data is being made, and correction will switch itself on |
+| `"plain"` | plain inputs for the rest of this session: the dump failed, and `fix.dump_error` says why |
+
+**Plain inputs** are the packet's own state in the same types and field names, so your policy code doesn't change.
+Nothing is lag-corrected (`horizon` is 0) and no flag is checked. `state.plain` is `True`, and every car's
+`confidence["plain"]` is `True` with `synced` and `consistent` `False`.
+
+- **As RLBot reports them:** `pos`, `vel`, `angVel`, `rotMat` (from the rotator), `boost`, `isSupersonic`,
+  `hasJumped`, `hasDoubleJumped`, `hasFlipped`, `dodgeTimeout`, `isDemoed`, `demoRespawnTimer`, `lastControls`, the
+  ball's `pos`, `vel` and `angVel`, and the pads (in the same order as corrected).
+- **From RLBot's single air-state enum:** `isOnGround` and `isJumping`, with all four `wheelsWithContact` equal to
+  `isOnGround`. So on a jump's first ticks `isOnGround` is `False`: the very thing correction fixes.
+- **From RLBot's dodge clocks** (RLBot v5): `flipTime`, `isFlipping`, `flipRelTorque`, `pitchLockLeft` and
+  `airTimeSinceJump` (with `jumpTime` as `airTimeSinceJump + 0.1`), so `canFlip` and `hasFlipReset` work.
+- **Stand-ins for what packets never carry:** `airTime`, `boostingTime`, `timeSinceBoosted`, `supersonicTime`,
+  `boostLockLeft` and the auto-flip fields are 0. `isBoosting` and `handbrakeVal` follow the boost and handbrake
+  buttons in `last_input`, and `jumpHoldBroken` is "jump isn't held". `worldContact`, `carContact` and `ballHitInfo`
+  are empty, the ball's `rotMat` is the identity, and on the ground the wheel normals are the car's up axis.
+
+`sent(controls)` works as usual. The lag meter keeps measuring, so the delay is already known when correction
+starts. `predict()` returns the last plain state, and `seed_exact()` raises.
+
+**When correction switches on.** When the dumper finishes, catSim's own `--check` looks at the folder. If the data
+is good, correction starts on the next packet between plays: a kickoff countdown, a goal or replay, or a new match.
+Never mid-play, so your bot never sees its inputs change under it in a challenge. From that packet on it tracks
+exactly as a corrector created there would, except that it has already measured the delay. One line is printed
+then. (Pass `log=` for your own logger, e.g. `log=self.logger.info`. The start of the dump and a failure print one
+line each too.)
+
+**If the dump fails** (no key file, Rocket League not found, a game version the dumper doesn't know), the bot keeps
+playing on plain inputs for the rest of the session. One line says why and gives the setup command that fixes it.
+Nothing raises.
+
+**Under the hood.** The dump is a separate process at below-normal priority, so your bot's process isn't slowed and
+no window pops up over the game. There is no thread in your bot: the corrector looks at the dump on each packet.
+Several bots on one PC (a 2v2 of your bot, a mirror match) make the data only once: the first takes a lock
+(`catsim_data.dump.lock` next to the folder), the others wait for its dump and switch on when it's done. If a bot
+closes mid-dump, the next start picks up from there: it waits for a dumper that is still running, or starts again.
 
 ## The corrected state
 
@@ -499,7 +559,7 @@ running): 1v1 median 0.54 ms (p99 2.4 ms), 3v3 median 0.87 ms (p99 3.0 ms). The 
 
 ```
 pip install --pre rlbot "catsim-rl==0.1.3" numpy pytest   # rlgym==2.0.1 rlgym-rocket-league rlgym-compat for the adapter tests
-CATSIM_DATA=path/to/catsim_data python -m pytest tests -q
+CATSIM_DATA=path/to/catsim_data python -m pytest tests -q          # (test_plain_mode.py: plain mode and the dump)
 CATSIM_DATA=path/to/catsim_data python tests/run_all.py        # every offline number in this README (about 30 s)
 CATSIM_DATA=path/to/catsim_data python tests/parity.py --lib native/target/release/catsim_correct.dll
 CATSIM_DATA=path/to/catsim_data python tests/make_trace.py trace.txt
@@ -511,7 +571,8 @@ g++ -std=c++20 -O2 -static -Inative/include native/examples/correct_trace.cpp na
 
 ```
 catsim_better_inputs/    the Python library: core.py (the corrector), rsview.py (RocketSim bookkeeping),
-                         packets.py (RLBot v5 / v4 readers), state.py (the output types), outputs.py (adapters)
+                         packets.py (RLBot v5 / v4 readers), state.py (the output types), outputs.py (adapters),
+                         data.py (checking and making catSim's data), setup.py (the setup command)
 native/                  the C library (Rust crate over public catSim): src/, include/catsim_correct.h, .hpp
 native/examples/         correct_trace.cpp, bench.cpp, rust_bot.rs, csharp/, java/
 examples/                RLBot v5 (with bot.toml), RLGym v2 and RLBot v4 bots

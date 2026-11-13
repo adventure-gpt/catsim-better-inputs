@@ -7,13 +7,17 @@ packet it was just given, before its policy runs. Not an RLBot script, no separa
     controls = my_policy(state)
     fix.sent(controls)
 
+catSim's game data: make it at setup time with `python -m catsim_better_inputs.setup --keys keys.txt`, or pass
+`dump_if_missing=True, keys="keys.txt"` to make it in the background while the bot plays on plain inputs (`fix.mode`).
 README.md has the details.
 """
-from .core import Corrector, ensure_data, FieldStats, HoldLastInput, LagMeter, Neutral, Tolerances, game_controls, same_controls
+from .core import Corrector, FieldStats, HoldLastInput, LagMeter, Neutral, Tolerances, game_controls, same_controls
+from .data import DumpJob, check_data, ensure_data
 from .packets import BallIn, CarIn, Frame, as_frame, from_rlbot_v4, from_rlbot_v5
 from .state import BallHitInfo, BallState, CarContact, CarState, Corrected, PadState, WorldContact
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 __all__ = ["Corrector", "Tolerances", "HoldLastInput", "Neutral", "LagMeter", "FieldStats", "same_controls", "game_controls",
            "Frame", "CarIn", "BallIn", "as_frame", "from_rlbot_v5", "from_rlbot_v4",
-           "CarState", "BallState", "PadState", "Corrected", "WorldContact", "CarContact", "BallHitInfo", "__version__", "ensure_data"]
+           "CarState", "BallState", "PadState", "Corrected", "WorldContact", "CarContact", "BallHitInfo", "__version__", "ensure_data",
+           "check_data", "DumpJob"]
