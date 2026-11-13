@@ -1,0 +1,14 @@
+#:schema https://rlbot.org/schemas/agent.json
+# RLBot v5 entry for example_bot_v5.py. Put this file, example_bot_v5.py, the catsim_better_inputs/ folder and your
+# catsim_data/ folder together in one folder and add that folder in RLBot. RLBot starts the bot in this folder, so
+# data_dir="catsim_data" finds the data. Point run_command at the Python that has catsim-rl and rlbot (2.x) installed,
+# e.g. "C:/path/to/venv/Scripts/python.exe example_bot_v5.py".
+[settings]
+name = "catsim example"
+run_command = "python example_bot_v5.py"
+run_command_linux = "python3 example_bot_v5.py"
+agent_id = "example/catsim_better_inputs"
+
+[details]
+description = "Drives at the ball on catSim's corrected state (catsim_better_inputs)"
+language = "Python"

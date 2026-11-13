@@ -1,0 +1,4 @@
+# The same instruction set catSim's own builds use (x86-64-v2): AVX encodings change a NaN's sign bit in one solver
+# path, and with it the bit-for-bit results. RUSTFLAGS in the environment replaces this.
+[build]
+rustflags = ["-C", "target-cpu=x86-64-v2"]
