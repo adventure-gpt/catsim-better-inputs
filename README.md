@@ -71,8 +71,8 @@ catsim-dump --out catsim_data --keys path/to/keys.txt          # keys.txt: see c
 
 The dumper only reads files: it never starts the game and never touches a running one. Nothing in this package
 contains game data. To run your bot on another machine (a tournament host, a friend's PC), ship `catsim_data/` inside
-your bot's folder, the same way RLBot bots already ship RocketSim's `collision_meshes/`. Without it the corrector
-switches itself off and your bot plays on the plain RLBot inputs.
+your bot's folder, the same way RLBot bots already ship RocketSim's `collision_meshes/`. Without it, creating the
+`Corrector` raises at start-up: catch that and let your bot play on the plain RLBot packet.
 
 **2a. Python:** copy the `catsim_better_inputs/` folder into your bot. It depends only on `catsim` and, for
 reading RLBot packets, `rlbot`. numpy, rlgym and rlgym-compat are needed only by the adapters that use them.
