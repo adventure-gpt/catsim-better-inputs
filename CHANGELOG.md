@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- **Dump on first run:** `ensure_data(data_dir, keys=...)` and `Corrector(..., dump_if_missing=True, keys=...)` make `catsim_data/` from the machine's own Rocket League install when it is missing, so a bot can ship only the key file. README: the two ways to run a bot on another machine.
+
 ## 0.1.2
 
 First release checked in real Rocket League matches (RLBot v5, 120 fps): every packet recorded, the packet of the

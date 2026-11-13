@@ -9,11 +9,11 @@ packet it was just given, before its policy runs. Not an RLBot script, no separa
 
 README.md has the details.
 """
-from .core import Corrector, FieldStats, HoldLastInput, LagMeter, Neutral, Tolerances, game_controls, same_controls
+from .core import Corrector, ensure_data, FieldStats, HoldLastInput, LagMeter, Neutral, Tolerances, game_controls, same_controls
 from .packets import BallIn, CarIn, Frame, as_frame, from_rlbot_v4, from_rlbot_v5
 from .state import BallHitInfo, BallState, CarContact, CarState, Corrected, PadState, WorldContact
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 __all__ = ["Corrector", "Tolerances", "HoldLastInput", "Neutral", "LagMeter", "FieldStats", "same_controls", "game_controls",
            "Frame", "CarIn", "BallIn", "as_frame", "from_rlbot_v5", "from_rlbot_v4",
-           "CarState", "BallState", "PadState", "Corrected", "WorldContact", "CarContact", "BallHitInfo", "__version__"]
+           "CarState", "BallState", "PadState", "Corrected", "WorldContact", "CarContact", "BallHitInfo", "__version__", "ensure_data"]

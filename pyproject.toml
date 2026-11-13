@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "catsim-better-inputs"
-version = "0.1.2"
+version = "0.1.3"
 description = "Better inputs for RLBot bots: catSim lag correction and physics-checked car flags in RocketSim's field names"
 readme = "README.md"
 license = "MIT"

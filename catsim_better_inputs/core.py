@@ -168,6 +168,29 @@ PROVENANCE = {"air_state": {"jump_clock", "dj_clock", "dodge_clock"}, "has_jumpe
               "dodge_elapsed": {"has_dodged", "dodge_clock"}, "supersonic": {"supersonic"}, "on_ground": set()}
 
 
+def ensure_data(data_dir: str = "catsim_data", keys: str | None = None, game: str | None = None,
+                timeout: float = 1800.0) -> str:
+    """Make sure `data_dir` holds catSim's game data; if it doesn't, dump it from this machine's own Rocket League
+    install (found from Steam or Epic, or `game`) with the key file `keys` (default: $CATSIM_RL_KEYS). Only reads the
+    game's files; never starts the game. The first dump takes a few minutes; later calls just check the folder.
+    Needs catsim-rl's dumper: pip install "catsim-rl[dump]". Returns the folder."""
+    import subprocess
+    import sys
+    check = subprocess.run([sys.executable, "-m", "catsim.dump", "--check", data_dir],
+                           capture_output=True, text=True)
+    if check.returncode == 0:
+        return data_dir
+    cmd = [sys.executable, "-m", "catsim.dump", "--out", data_dir]
+    if keys:
+        cmd += ["--keys", keys]
+    if game:
+        cmd += ["--game", game]
+    dump = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if dump.returncode != 0:
+        raise RuntimeError(f"catsim data dump failed ({dump.returncode}): {(dump.stderr or dump.stdout)[-400:]}")
+    return data_dir
+
+
 class Corrector:
     """catSim input correction for one bot (or a hivemind: pass several indices).
 
@@ -180,10 +203,13 @@ class Corrector:
     def __init__(self, index: int | list = 0, data_dir: str | None = None, training_action_delay: int = 0,
                  input_delay: int | None = None, opponent_model=None, tolerances: Tolerances | None = None,
                  field_info=None, map: str = "Stadium_P", log_flag_errors: bool = False, trust_packet_flags: bool = False,
-                 rlbot_air_order: str = "auto", last_input_is_applied: bool = True, pad_timer: str = "auto"):
+                 rlbot_air_order: str = "auto", last_input_is_applied: bool = True, pad_timer: str = "auto",
+                 dump_if_missing: bool = False, keys: str | None = None):
         import catsim
         self.cs = catsim
         data = data_dir or os.environ.get("CATSIM_DATA") or "catsim_data"
+        if dump_if_missing:                      # ship only the key file: the data is dumped here on first run
+            ensure_data(data, keys=keys)
         catsim.init(data, silent=True)
         self.data_dir = str(catsim._data_dir)
         self.lib = catsim._lib()
