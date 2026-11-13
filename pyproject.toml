@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "catsim-better-inputs"
+version = "0.1.2"
+description = "Better inputs for RLBot bots: catSim lag correction and physics-checked car flags in RocketSim's field names"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "adventure-gpt" }]
+keywords = ["rocket league", "rlbot", "catsim", "rocketsim", "reinforcement learning"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Games/Entertainment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["catsim-rl>=0.1.3"]
+
+[project.optional-dependencies]
+# catsim-dump (makes catsim_data/ from your own game files) and numpy for the observation helpers in outputs.py
+dump = ["catsim-rl[dump]>=0.1.3"]
+numpy = ["numpy"]
+
+[project.urls]
+Homepage = "https://github.com/adventure-gpt/catsim-better-inputs"
+Source = "https://github.com/adventure-gpt/catsim-better-inputs"
+"catSim" = "https://github.com/adventure-gpt/catsim-public"
+
+[tool.hatch.build.targets.wheel]
+packages = ["catsim_better_inputs"]
+
+[tool.hatch.build.targets.sdist]
+include = ["catsim_better_inputs", "README.md", "LICENSE", "CHANGELOG.md", "examples", "tests"]
